@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Real-Time Location Sharing Without Map</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 text-gray-900">
+  <div class="max-w-xl mx-auto p-4 space-y-4">
+    <h1 class="text-2xl font-bold text-center">Real-Time Location Sharing</h1>
+    <div id="create-section" class="text-center">
+      <button id="createLink" class="bg-blue-600 text-white px-4 py-2 rounded">Create Share Link</button>
+      <div id="shareURL" class="mt-4 text-sm text-gray-600 break-all"></div>
+    </div>
+    <div id="status" class="text-gray-700 text-center text-lg"></div>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
+    import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyCpcaq3LVGUpqrF1W-2TeJqFfLORnrEuFw",
+      authDomain: "anuu-ffa56.firebaseapp.com",
+      projectId: "anuu-ffa56",
+      storageBucket: "anuu-ffa56.firebasestorage.app",
+      messagingSenderId: "408039643794",
+      appId: "1:408039643794:web:008f55e0f8a3a57041a44b",
+      measurementId: "G-MKF1CLRTSF"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = params.get('session');
+
+    const createLinkBtn = document.getElementById('createLink');
+    const shareURLDiv = document.getElementById('shareURL');
+    const statusDiv = document.getElementById('status');
+
+    function generateId(length = 6) {
+      const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+      return Array.from({length}, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    }
+
+    function updateDistance(myLoc, friendLoc) {
+      if (!myLoc || !friendLoc) return '';
+      const R = 6371e3; // meters
+      const φ1 = myLoc.lat * Math.PI/180;
+      const φ2 = friendLoc.lat * Math.PI/180;
+      const Δφ = (friendLoc.lat - myLoc.lat) * Math.PI/180;
+      const Δλ = (friendLoc.lng - myLoc.lng) * Math.PI/180;
+      const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+                Math.cos(φ1) * Math.cos(φ2) *
+                Math.sin(Δλ/2) * Math.sin(Δλ/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      const d = R * c;
+      return d.toFixed(1);
+    }
+
+    if (!sessionId) {
+      // Show create link button & logic
+      createLinkBtn.addEventListener('click', () => {
+        const id = generateId();
+        const url = `${window.location.origin}${window.location.pathname}?session=${id}`;
+        shareURLDiv.innerHTML = `
+          <p class="mb-2">Share this link with your friend:</p>
+          <div class="bg-white p-2 rounded border break-all">${url}</div>
+          <p class="mt-4 font-semibold">Waiting for friend's location...</p>
+        `;
+
+        navigator.geolocation.getCurrentPosition(pos => {
+          const myLatLng = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          const friendDoc = doc(db, 'sessions', id);
+
+          onSnapshot(friendDoc, docSnap => {
+            if (!docSnap.exists()) {
+              statusDiv.textContent = 'Friend has not shared location yet.';
+              return;
+            }
+            const data = docSnap.data();
+            if (!data.lat || !data.lng) {
+              statusDiv.textContent = 'Friend location data missing.';
+              return;
+            }
+            const friendLatLng = { lat: data.lat, lng: data.lng };
+            const dist = updateDistance(myLatLng, friendLatLng);
+            const lastUpdated = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : 'unknown';
+
+            statusDiv.innerHTML = `
+              <p>Your Location: ${myLatLng.lat.toFixed(5)}, ${myLatLng.lng.toFixed(5)}</p>
+              <p>Friend's Location: ${friendLatLng.lat.toFixed(5)}, ${friendLatLng.lng.toFixed(5)}</p>
+              <p>Friend's last update: ${lastUpdated}</p>
+              <p>Distance between you: ${dist} meters</p>
+            `;
+          });
+        }, err => {
+          alert("Location permission is required.");
+        }, { enableHighAccuracy: true });
+
+      });
+    } else {
+      // Friend side: update location continuously
+      document.getElementById('create-section').style.display = 'none';
+      statusDiv.textContent = 'Sharing your live location...';
+
+      const friendDoc = doc(db, 'sessions', sessionId);
+
+      navigator.geolocation.getCurrentPosition(pos => {
+        const myLatLng = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+
+        // Start watching position and update Firestore
+        navigator.geolocation.watchPosition(position => {
+          const { latitude, longitude } = position.coords;
+          const timestamp = new Date().toISOString();
+
+          setDoc(friendDoc, {
+            lat: latitude,
+            lng: longitude,
+            timestamp
+          }, { merge: true }).catch(e => {
+            statusDiv.textContent = "Error updating location.";
+          });
+
+          statusDiv.textContent = `Location updated at ${new Date(timestamp).toLocaleTimeString()}`;
+
+        }, err => {
+          statusDiv.textContent = 'Error getting location updates: ' + err.message;
+        }, { enableHighAccuracy: true, maximumAge: 1000, timeout: 5000 });
+
+      }, err => {
+        alert("Location permission is required.");
+      }, { enableHighAccuracy: true });
+    }
+  </script>
+</body>
+</html>
